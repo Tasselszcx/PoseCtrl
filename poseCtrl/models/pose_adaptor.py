@@ -6,7 +6,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from poseCtrl.data.dataset import load_base_points
-
+import cv2
 
 class VPmatrixEncoder(nn.Module):
     def __init__(self, input_channels=1, base_channels=64, output_size=(77, 77)):
@@ -130,7 +130,56 @@ class ImageProjModel(torch.nn.Module):
         )
         clip_extra_context_tokens = self.norm(clip_extra_context_tokens)
         return clip_extra_context_tokens
-        
+    
+
+class VPmatrixPointsV1(nn.Module):
+    """ 
+    Input:  
+        V_matrix: [batch,4,4]
+        P_matrix: [batch,4,4]
+        raw_base_points: [13860,4]
+    Output:
+        base_points: [batch,77,768]
+    """
+    def __init__(self, raw_base_points):
+        super().__init__() 
+        self.register_buffer("raw_base_points", raw_base_points)
+
+    def forward(self, V_matrix, P_matrix):
+        VP_matrix = torch.bmm(P_matrix, V_matrix)  # [batch, 4, 4]
+        points = self.raw_base_points.unsqueeze(0).expand(VP_matrix.shape[0], -1, -1)
+        transformed_points = torch.bmm(points, VP_matrix.transpose(1, 2))  # [batch, 13860, 4]
+        transformed_points[..., :3] = torch.where(
+            transformed_points[..., 3:4] != 0,
+            transformed_points[..., :3] / transformed_points[..., 3:4],
+            transformed_points[..., :3]  
+        ) # [batch, 13860, 3]
+        transformed_points = transformed_points[..., :3]
+        image_width, image_height = 512, 512
+
+        screen_coords = transformed_points.clone()
+        screen_coords[..., 0] = (screen_coords[..., 0] + 1) * 0.5 * image_width   # X: [-1,1] -> [0,512]
+        screen_coords[..., 1] = (1 - (screen_coords[..., 1] + 1) * 0.5) * image_height  # Y 翻转: [-1,1] -> [512,0]
+
+        screen_coords = screen_coords.round().long()  # [batch, 13860, 3]
+
+        batch_size = screen_coords.shape[0]
+        tensor_images = torch.zeros((batch_size, image_height, image_width), dtype=torch.uint8)
+
+        for b in range(batch_size):
+            pixels = screen_coords[b].cpu().numpy()
+            image_array = np.full((image_height, image_width), 255, dtype=np.uint8)
+
+            for x, y, _ in pixels:
+                if 0 <= x < image_width and 0 <= y < image_height:
+                    image_array[y, x] = 0  
+            inverted_array = 255 - image_array
+            kernel = np.ones((3, 3), np.uint8)  
+            dilated_image = cv2.dilate(inverted_array, kernel, iterations=1)  
+            smoothed_image = cv2.GaussianBlur(dilated_image, (7, 7), 0)
+            _, binary_mask = cv2.threshold(smoothed_image, 100, 255, cv2.THRESH_BINARY)
+            tensor_images[b] = torch.from_numpy(binary_mask)
+        return tensor_images      
 
 # --------------------- Dataset & Testing ---------------------
 
