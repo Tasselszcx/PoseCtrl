@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument(
         "--pretrained_pose_path",
         type=str,
-        default='/content/drive/MyDrive/posectrl.bin',
+        default=None,
         help="Path to pretrained  posectrl model. If not specified weights are initialized randomly.",
     )
     parser.add_argument(
@@ -106,7 +106,7 @@ def parse_args():
     parser.add_argument(
         "--save_steps",
         type=int,
-        default=500,
+        default=1000,
         help=(
             "Save a checkpoint of the training state every X updates"
         ),
@@ -373,12 +373,12 @@ def main():
                 save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                 accelerator.save_state(save_path)
                 torch.save(pose_ctrl.state_dict(), os.path.join(save_path,'model.pth'))
-                torch.save(optimizer.state_dict(), os.path.join(save_path,'optimizer.pth'))
+                # torch.save(optimizer.state_dict(), os.path.join(save_path,'optimizer.pth'))
 
-                img = noise_pred[0].permute(1, 2, 0).cpu().detach().numpy()
-                img = (img * 255).astype(np.uint8)
-                image = Image.fromarray(img)
-                image.save(os.path.join(save_path,'image.png'))
+                # img = noise_pred[0].permute(1, 2, 0).cpu().detach().numpy()
+                # img = (img * 255).astype(np.uint8)
+                # image = Image.fromarray(img)
+                # image.save(os.path.join(save_path,'image.png'))
 
             begin = time.perf_counter()
 
