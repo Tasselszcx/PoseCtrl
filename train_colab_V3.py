@@ -14,6 +14,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection, CLIPProcessor
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler,UNet2DConditionModel
 import sys
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 notebook_path = os.getcwd()
@@ -143,11 +144,13 @@ def parse_args():
     return args
 
 class posectrl(nn.Module):
-    def __init__(self, unet, image_proj_model_point, image_proj_model, atten_modules, ckpt_path=None):
+    def __init__(self, unet, unet_copy, image_proj_model_point, image_proj_model, atten_modules, atten_modules_p, ckpt_path=None):
         super().__init__()
         self.unet = unet
+        self.unet_copy = unet_copy
         self.image_proj_model_point = image_proj_model_point
         self.atten_modules = atten_modules
+        self.atten_modules_p = atten_modules_p
         self.image_proj_model = image_proj_model
 
         if ckpt_path is not None:
@@ -161,8 +164,24 @@ class posectrl(nn.Module):
             encoder_hidden_states = torch.cat([encoder_hidden_states, point_tokens, feature_tokens], dim=1)
         else:
             encoder_hidden_states=torch.cat([point_tokens, feature_tokens], dim=1)
+        ip_hidden_states = torch.cat([encoder_hidden_states, feature_tokens], dim = 1)
+        point_hidden_states = torch.cat([encoder_hidden_states, point_tokens], dim = 1)
         # Predict the noise residual
         noise_pred = self.unet(noisy_latents, timesteps, encoder_hidden_states).sample
+        down_block_res_samples, mid_block_res_sample = self.posecontrolnet(
+                    noisy_latents,
+                    timesteps,
+                    point_hidden_states,
+                )
+        noise_pred = self.unet(
+                    noisy_latents,
+                    timesteps,
+                    ip_hidden_states,
+                    down_block_additional_residuals=down_block_res_samples,
+                    mid_block_additional_residual=mid_block_res_sample,
+                    return_dict=False,
+                )[0]
+        
         return noise_pred
 
     def load_from_checkpoint(self, ckpt_path: str):
@@ -213,20 +232,26 @@ def main():
     unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet")
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(args.image_encoder_path)
     processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+    unet_copy = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet")
     # freeze parameters of models to save more memory
     unet.requires_grad_(False)
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     image_encoder.requires_grad_(False)
     
+    unet_sd.requires_grad_(True)
+
     #vp-matrix encoder
     raw_base_points=load_base_points(args.base_point_path)  
     vpmatrix_points_sd = VPmatrixPointsV1(raw_base_points)
+    # v2
     image_proj_model = ImageProjModel(
         cross_attention_dim=unet.config.cross_attention_dim,
         clip_embeddings_dim=image_encoder.config.projection_dim,
         clip_extra_context_tokens=4,
     )
+    # v1
+    vpmatrix_points_sd = VPmatrixPoints(raw_base_points)
     image_proj_model_point = VPProjModel(
         cross_attention_dim=unet.config.cross_attention_dim,
         clip_embeddings_dim=image_encoder.config.projection_dim,
@@ -254,17 +279,47 @@ def main():
             weights = {
                 "to_k_ip.weight": unet_sd[layer_name + ".to_k.weight"].clone(),
                 "to_v_ip.weight": unet_sd[layer_name + ".to_v.weight"].clone(),
-                "to_k_pose.weight": unet_sd[layer_name + ".to_k.weight"].clone(),
-                "to_v_pose.weight": unet_sd[layer_name + ".to_v.weight"].clone(),
             }
             attn_procs[name] = PoseAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim)
             attn_procs[name].load_state_dict(weights)
 
     unet.set_attn_processor(attn_procs)
 
+
+    attn_procs_p = {}
+    unet_sd_p = unet_copy.state_dict()
+    for name in unet_copy.attn_processors.keys():
+        cross_attention_dim = None if name.endswith("attn1.processor") else unet_copy.config.cross_attention_dim
+
+        if name.startswith("mid_block"):
+            hidden_size = unet_copy.config.block_out_channels[-1]
+        elif name.startswith("up_blocks"):
+            block_id = int(name[len("up_blocks.")])
+            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+        elif name.startswith("down_blocks"):
+            block_id = int(name[len("down_blocks.")])
+            hidden_size = unet_copy.config.block_out_channels[block_id]
+
+        if cross_attention_dim is None:
+            attn_procs_p[name] = AttnProcessor()
+        else:
+            layer_name = name.split(".processor")[0]
+            weights = {
+                "to_k_pose.weight": unet_sd_p[layer_name + ".to_k.weight"].clone(),
+                "to_v_pose.weight": unet_sd_p[layer_name + ".to_v.weight"].clone(),
+            }
+            attn_procs_p[name] = PoseAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim)
+            attn_procs_p[name].load_state_dict(weights)
+
+    unet_copy.set_attn_processor(attn_procs_p)
+
+
     atten_modules = torch.nn.ModuleList(unet.attn_processors.values())
     atten_modules.requires_grad_(True)
-    pose_ctrl = posectrl(unet, image_proj_model_point, image_proj_model, atten_modules, args.pretrained_pose_path)
+    atten_modules_p = torch.nn.ModuleList(unet_copy.attn_processors.values())
+    atten_modules_p.requires_grad_(True)
+
+    pose_ctrl = posectrl(unet, unet_copy, image_proj_model_point, image_proj_model, atten_modules, atten_modules_p, args.pretrained_pose_path)
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
@@ -276,7 +331,12 @@ def main():
     image_encoder.to(accelerator.device, dtype=weight_dtype)
     
     # optimizer
-    params_to_opt = itertools.chain(pose_ctrl.image_proj_model_point.parameters(),  pose_ctrl.atten_modules.parameters(), pose_ctrl.image_proj_model.parameters())
+    params_to_opt = itertools.chain(pose_ctrl.image_proj_model_point.parameters(),  
+                                    pose_ctrl.atten_modules.parameters(), 
+                                    pose_ctrl.image_proj_model.parameters(),
+                                    pose_ctrl.atten_modules_p.parameters(),
+                                    pose_ctrl.unet_copy.parameters())
+
     optimizer = torch.optim.AdamW(params_to_opt, lr=args.learning_rate, weight_decay=args.weight_decay)
     
     # dataloader
@@ -293,18 +353,6 @@ def main():
     pose_ctrl, optimizer, train_dataloader = accelerator.prepare(pose_ctrl, optimizer, train_dataloader)
     
 
-    val_pipe = StableDiffusionImg2ImgPipeline(
-        scheduler=noise_scheduler,
-        tokenizer=tokenizer,
-        text_encoder=text_encoder,
-        vae=vae,
-        unet=unet,
-        feature_extractor=None, 
-        safety_checker=None,  
-        image_encoder=image_encoder,
-    )
-
-    val_pipe.to(torch.device("cuda"), torch_dtype=torch.float16)
 
 
     global_step = 0
