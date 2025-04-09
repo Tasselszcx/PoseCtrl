@@ -20,6 +20,7 @@ import sys
 sys.path.append('/content/drive/MyDrive/PoseCtrl')
 sys.path.append('/content/drive/MyDrive/PoseCtrl/poseCtrl')
 from poseCtrl.models.pose_adaptor import VPmatrixPoints, ImageProjModel, VPmatrixPointsV3, VPProjModel
+from poseCtrl.models.pose_controlnet import PoseControlNetModel 
 from poseCtrl.models.attention_processor import AttnProcessor, PoseAttnProcessor
 from poseCtrl.models.attention_processor import PoseAttnProcessorV2Ctrl, PoseAttnProcessorV2IP
 from poseCtrl.data.dataset import CustomDataset, load_base_points
@@ -96,7 +97,7 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
-        "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=2, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument(
         "--dataloader_num_workers",
@@ -167,11 +168,12 @@ class posectrl(nn.Module):
         ip_hidden_states = torch.cat([encoder_hidden_states, feature_tokens], dim = 1)
         point_hidden_states = torch.cat([encoder_hidden_states, point_tokens], dim = 1)
         # Predict the noise residual
-        noise_pred = self.unet(noisy_latents, timesteps, encoder_hidden_states).sample
+        # noise_pred = self.unet(noisy_latents, timesteps, encoder_hidden_states).sample
         down_block_res_samples, mid_block_res_sample = self.unet_copy(
                     noisy_latents,
                     timesteps,
                     point_hidden_states,
+                    return_dict=False,
                 )
         noise_pred = self.unet(
                     noisy_latents,
@@ -233,7 +235,7 @@ def main():
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(args.image_encoder_path)
     processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
     # unet_copy = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet")
-    unet_copy = ControlNetModel.from_unet(unet)
+    unet_copy = PoseControlNetModel.from_unet(unet)
     # freeze parameters of models to save more memory
     unet.requires_grad_(False)
     vae.requires_grad_(False)

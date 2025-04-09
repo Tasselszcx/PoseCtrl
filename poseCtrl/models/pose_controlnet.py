@@ -875,7 +875,7 @@ def zero_module(module):
 if __name__ == '__main__':
     from diffusers import StableDiffusionControlNetPipeline, UniPCMultistepScheduler,UNet2DConditionModel
     unet = UNet2DConditionModel.from_pretrained('runwayml/stable-diffusion-v1-5', subfolder="unet")
-    controlnet = ControlNetModel.from_unet(unet)
+    controlnet = PoseControlNetModel.from_unet(unet)
 
     batch_size = 1
     channels = 4  # 修改为4个通道，可能需要根据实际模型结构来调整

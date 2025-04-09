@@ -263,6 +263,7 @@ class StableDiffusionPosectrlPipeline(
         self.image_proj_model_point = self.init_VP()
         self.image_proj_model = self.init_proj()
         self.vpmatrix_points_sd = self.init_point()
+        self.posecontrolnet=posecontrolnet
 
     def init_ctrl(self):
         self.set_posectrl()
