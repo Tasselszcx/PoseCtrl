@@ -199,14 +199,14 @@ class PoseControlNet:
 
                 # Get residual hints from auxiliary UNet
                 down_block_res_samples, mid_block_res_sample = self.unet_copy(
-                    latent_model_input, t_tensor, ip_prompt_embeds, return_dict=False
+                    latent_model_input, t_tensor, point_prompt_embeds, return_dict=False
                 )
 
                 # Predict noise using main UNet
                 noise_pred = self.pipe.unet(
                     latent_model_input,
                     t_tensor,
-                    encoder_hidden_states=point_prompt_embeds,
+                    encoder_hidden_states=ip_prompt_embeds,
                     down_block_additional_residuals=down_block_res_samples,
                     mid_block_additional_residual=mid_block_res_sample,
                     return_dict=False,
@@ -480,14 +480,14 @@ class PoseControlNetV3_1:
             t_tensor = torch.tensor([t], device=device, dtype=latents.dtype).expand(latent_model_input.shape[0])
 
             down_block_res_samples, mid_block_res_sample = self.unet_copy(
-                latent_model_input, t_tensor, ip_prompt_embeds, return_dict=False
+                latent_model_input, t_tensor, point_prompt_embeds, return_dict=False
             )
 
             # 5. predict noise
             noise_pred = self.pipe.unet(
                 latent_model_input,
                 t_tensor,
-                point_prompt_embeds,
+                ip_prompt_embeds,
                 down_block_additional_residuals=down_block_res_samples,
                 mid_block_additional_residual=mid_block_res_sample,
                 return_dict=False,
