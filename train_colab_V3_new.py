@@ -98,7 +98,7 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
-        "--train_batch_size", type=int, default=2, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=3, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument(
         "--dataloader_num_workers",
@@ -164,20 +164,21 @@ class posectrl(nn.Module):
 
         ip_hidden_states = torch.cat([encoder_hidden_states, feature_tokens], dim = 1)
         point_hidden_states = torch.cat([encoder_hidden_states, point_tokens], dim = 1)
-
+        
         down_block_res_samples, mid_block_res_sample = self.unet_copy(
                     noisy_latents,
                     timesteps,
                     point_hidden_states,
                     return_dict=False,
                 )
+        # down_block_res_samples = [torch.zeros_like(tensor).to(device=tensor.device,dtype=tensor.dtype) for tensor in down_block_res_samples]
         noise_pred = self.unet(
                     noisy_latents,
                     timesteps,
                     ip_hidden_states,
                     down_block_additional_residuals=down_block_res_samples,
                     mid_block_additional_residual=mid_block_res_sample,
-                    return_dict=False,
+                    return_dict=False
                 )[0]
         
         return noise_pred
@@ -228,7 +229,7 @@ def main():
     tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder")
     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae")
-    unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet")
+    unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet",do_rescale=False)
     image_encoder = CLIPVisionModelWithProjection.from_pretrained(args.image_encoder_path)
     processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
     # unet_copy = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet")
@@ -372,7 +373,7 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 with torch.no_grad():
-                    inputs = processor(images=batch['feature'], return_tensors="pt") 
+                    inputs = processor(images=batch['feature'], return_tensors="pt", do_rescale=False) 
                     image_tensor = inputs["pixel_values"] 
                     image_embeds = image_encoder(image_tensor.to(accelerator.device, dtype=weight_dtype)).image_embeds
                 with torch.no_grad():
@@ -383,7 +384,7 @@ def main():
 
                 if "text_input_ids" in batch:
                     with torch.no_grad():
-                        encoder_hidden_states = text_encoder(batch["text_input_ids"].to(accelerator.device))[0]
+                        encoder_hidden_states = text_encoder(batch["text_input_ids"].to(accelerator.device), do_rescale=False)[0]
                 else:
                     text_input_ids = tokenizer(
                             "a highly detailed anime person, in front of a pure black background",

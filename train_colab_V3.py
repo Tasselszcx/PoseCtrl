@@ -367,7 +367,7 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 with torch.no_grad():
-                    inputs = processor(images=batch['feature'], return_tensors="pt") 
+                    inputs = processor(images=batch['feature'], return_tensors="pt", do_rescale=False) 
                     image_tensor = inputs["pixel_values"] 
                     image_embeds = image_encoder(image_tensor.to(accelerator.device, dtype=weight_dtype)).image_embeds
 
