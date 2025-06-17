@@ -223,7 +223,7 @@ class VPmatrixPointsV1(nn.Module):
         P_matrix: [batch,4,4]
         raw_base_points: [13860,4]
     Output:
-        base_points: [batch,77,768]
+        base_points: image
     """
     def __init__(self, raw_base_points,image_width = 512,image_height=512):
         super().__init__() 
