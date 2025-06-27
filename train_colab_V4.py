@@ -190,6 +190,8 @@ class posectrl(nn.Module):
     def forward(self, noisy_latents, timesteps, encoder_hidden_states, point_embeds, V_matrix, P_matrix):
         point_tokens = self.image_proj_model_point(point_embeds, V_matrix, P_matrix)
         if encoder_hidden_states!=None:
+            if encoder_hidden_states.shape[0] != point_tokens.shape[0]:
+                encoder_hidden_states = encoder_hidden_states[:point_tokens.shape[0], :, :]
             encoder_hidden_states = torch.cat([encoder_hidden_states, point_tokens], dim=1)
         else:
             encoder_hidden_states=torch.cat([point_tokens], dim=1)
@@ -326,7 +328,6 @@ def main():
     )
 
     val_pipe.to(torch.device("cuda"), torch_dtype=torch.float16)
-
 
     global_step = 0
     for epoch in range(0, args.num_train_epochs): #default is 100
