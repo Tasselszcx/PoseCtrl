@@ -184,6 +184,45 @@ def parse_args():
 
     return args
 
+def custom_collate_fn(batch):
+    """
+    A custom collate function to handle batches where some samples may
+    be missing the 'feature' key.
+    """
+    # --- 1. Separate standard keys and text ---
+    # These keys are expected to be in every sample
+    image_tensors = torch.stack([d['image'] for d in batch])
+    proj_matrices = torch.stack([d['projection_matrix'] for d in batch])
+    view_matrices = torch.stack([d['view_matrix'] for d in batch])
+    texts = [d['text'] for d in batch] # Text is a list of strings, not a tensor
+
+    # --- 2. Create the base collated batch ---
+    collated_batch = {
+        'image': image_tensors,
+        'projection_matrix': proj_matrices,
+        'view_matrix': view_matrices,
+        'text': texts
+    }
+
+    # --- 3. Handle the optional 'feature' key ---
+    # Check if any item in the batch has the 'feature' key
+    has_feature = any('feature' in d for d in batch)
+
+    if has_feature:
+        feature_tensors = []
+        # Find one sample that has the feature to get its shape for placeholder tensors
+        feature_sample = next(d['feature'] for d in batch if 'feature' in d)
+        # Create a placeholder (zeros) with the same shape and type
+        zero_feature_placeholder = torch.zeros_like(feature_sample)
+
+        for d in batch:
+            # Use the actual feature if it exists, otherwise use the placeholder
+            feature_tensors.append(d.get('feature', zero_feature_placeholder))
+
+        # Stack them into a single tensor and add to the batch
+        collated_batch['feature'] = torch.stack(feature_tensors)
+
+    return collated_batch
 class posectrl(nn.Module):
     def __init__(self, unet, image_proj_model_point, atten_modules, ckpt_path=None):
         super().__init__()
@@ -312,16 +351,16 @@ def main():
     # dataloader
     # train_dataset = CustomDataset_v4(args.data_root_path, camera_params_file=args.CAMERA_PARAMS_FILE, image_features_file=args.IMAGE_FEATURES_FILE)
     train_dataset = CombinedDataset(
-    path1=args.data_root_path_1,
-    path2=args.data_root_path_2,
-    camera_params_file_v4=args.CAMERA_PARAMS_FILE,
-    image_features_file_v4=args.IMAGE_FEATURES_FILE
-)
-
+      path1=args.data_root_path_1,
+      path2=args.data_root_path_2,
+      camera_params_file_v4=args.CAMERA_PARAMS_FILE,
+      image_features_file_v4=args.IMAGE_FEATURES_FILE
+    )
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
         batch_size=args.train_batch_size,
+        collate_fn=custom_collate_fn,
         num_workers=args.dataloader_num_workers,
     )
     
