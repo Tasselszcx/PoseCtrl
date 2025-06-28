@@ -35,6 +35,7 @@ from accelerate.utils import ProjectConfiguration
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection, CLIPProcessor
 import sys
+from pathlib import Path
 # sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 current_dir = os.path.dirname(os.path.abspath(__file__))
 current_dir = os.path.join(current_dir, "PoseCtrl")
@@ -183,6 +184,20 @@ def parse_args():
         args.local_rank = env_local_rank
 
     return args
+
+def change_checkpoint(checkpoint, new_checkpoint_path):
+    sd = checkpoint
+    image_proj_model_point_sd = {}
+    atten_sd = {}
+    for k in sd:
+        if k.startswith("unet"):
+            pass
+        elif k.startswith("image_proj_model_point"):
+            image_proj_model_point_sd[k.replace("image_proj_model_point.", "")] = sd[k]
+        elif k.startswith("atten_modules"):
+            atten_sd[k.replace("atten_modules.", "")] = sd[k]
+    new_checkpoint_path = Path(new_checkpoint_path, "posectrl.bin")
+    torch.save({"image_proj_model_point": image_proj_model_point_sd, "atten_modules": atten_sd}, new_checkpoint_path)
 
 def custom_collate_fn(batch):
     """
@@ -444,13 +459,8 @@ def main():
             if global_step % args.save_steps == 0:
                 save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                 accelerator.save_state(save_path)
-                torch.save(pose_ctrl.state_dict(), os.path.join(save_path,'model.pth'))
-                # torch.save(optimizer.state_dict(), os.path.join(save_path,'optimizer.pth'))
-
-                # img = noise_pred[0].permute(1, 2, 0).cpu().detach().numpy()
-                # img = (img * 255).astype(np.uint8)
-                # image = Image.fromarray(img)
-                # image.save(os.path.join(save_path,'image.png'))
+                # torch.save(pose_ctrl.state_dict(), os.path.join(save_path,'model.pth'))
+                change_checkpoint(pose_ctrl.state_dict(), save_path)
 
             begin = time.perf_counter()
 
