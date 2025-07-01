@@ -871,7 +871,8 @@ class CombinedDataset(Dataset):
             'image': image_tensor,
             'projection_matrix': p_matrix_tensor,
             'view_matrix': v_matrix_tensor,
-            'text': sample_data['text']
+            'text': sample_data['text'],
+            'type': sample_data['type']
         }
 
         # 对于 v1 类型的数据，加载并转换 'feature' 图像
