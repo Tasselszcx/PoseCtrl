@@ -47,38 +47,8 @@ from poseCtrl.data.dataset import CustomDataset_v4, load_base_points, CombinedDa
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, StableDiffusionInpaintPipelineLegacy, DDIMScheduler, AutoencoderKL
 from PIL import Image
 import numpy as np
-def validation(val_pipe):
-    pass
-
-from collections import defaultdict
-import random
-from torch.utils.data import Sampler
-
-class GroupedBatchSampler(Sampler):
-    def __init__(self, dataset, batch_size):
-        self.batch_size = batch_size
-        self.type_to_indices = defaultdict(list)
-
-        for idx in range(len(dataset)):
-            sample_type = dataset.samples[idx]['type']
-            self.type_to_indices[sample_type].append(idx)
-
-        self.batches = []
-        for sample_type, indices in self.type_to_indices.items():
-            random.shuffle(indices)
-            for i in range(0, len(indices), batch_size):
-                batch = indices[i:i + batch_size]
-                if len(batch) == batch_size:
-                    self.batches.append(batch)
-
-        random.shuffle(self.batches)  # 打乱 batch 顺序
-
-    def __iter__(self):
-        yield from self.batches
-
-    def __len__(self):
-        return len(self.batches)
-
+from poseCtrl.models.posectrl import PoseCtrlV4_val
+from diffusers import StableDiffusionPipeline
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -117,7 +87,7 @@ def parse_args():
     parser.add_argument(
         "--data_root_path_2",
         type=str,
-        default="/content/drive/MyDrive/images_01/images/image",
+        default="/content/image",
         # required=True,
         help="Training data root path",
     )
@@ -139,6 +109,13 @@ def parse_args():
         "--data_root_path_5",
         type=str,
         default="/content/drive/MyDrive/images_01/images/image_right",
+        # required=True,
+        help="Training data root path",
+    )
+    parser.add_argument(
+        "--val_data_root_path_2",
+        type=str,
+        default="/content/drive/MyDrive/images_01/images/image_test",
         # required=True,
         help="Training data root path",
     )
@@ -227,6 +204,64 @@ def parse_args():
         args.local_rank = env_local_rank
 
     return args
+
+from torchvision import transforms
+
+def denormalize(tensor, mean, std):
+    return tensor * std + mean
+
+def validation(pose_model, save_path, val_dataloader, device):
+    os.makedirs(save_path, exist_ok=True)
+    pose_model.eval()
+
+    with torch.no_grad():
+        for idx, data in enumerate(val_dataloader):
+            image = data['image'][0].to(device)
+            vmatrix = data['view_matrix'].to(torch.float16).unsqueeze(0).to(device)
+            pmatrix = data['projection_matrix'].to(torch.float16).unsqueeze(0).to(device)
+            text = data['text'][0] 
+
+            images = pose_model.generate(prompt=text, num_samples=4, num_inference_steps=50, seed=42, V_matrix=vmatrix, P_matrix=pmatrix)
+
+            save_img_path = os.path.join(save_path, f"image_{idx}.png")
+            image = denormalize(image, 0.5, 0.5)
+            image_pil = transforms.ToPILImage()(image)
+
+            combined_image = Image.new('RGB', (image_pil.width + images.width, image_pil.height))
+            combined_image.paste(image_pil, (0, 0))
+            combined_image.paste(images, (image_pil.width, 0))
+            combined_image.save(save_img_path)
+
+
+from collections import defaultdict
+import random
+from torch.utils.data import Sampler
+
+class GroupedBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size):
+        self.batch_size = batch_size
+        self.type_to_indices = defaultdict(list)
+
+        for idx in range(len(dataset)):
+            sample_type = dataset.samples[idx]['type']
+            self.type_to_indices[sample_type].append(idx)
+
+        self.batches = []
+        for sample_type, indices in self.type_to_indices.items():
+            random.shuffle(indices)
+            for i in range(0, len(indices), batch_size):
+                batch = indices[i:i + batch_size]
+                if len(batch) == batch_size:
+                    self.batches.append(batch)
+
+        random.shuffle(self.batches)  # 打乱 batch 顺序
+
+    def __iter__(self):
+        yield from self.batches
+
+    def __len__(self):
+        return len(self.batches)
+
 
 def change_checkpoint(checkpoint, new_checkpoint_path):
     sd = checkpoint
@@ -346,7 +381,15 @@ def main():
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     image_encoder.requires_grad_(False)
-    
+    pipe = StableDiffusionPipeline(
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+        vae=vae,
+        unet=unet,
+        scheduler=noise_scheduler,
+        safety_checker=None, 
+        feature_extractor=None 
+    )
     #vp-matrix encoder
     raw_base_points1=load_base_points(args.base_point_path1)  
     raw_base_points2=load_base_points(args.base_point_path2) 
@@ -415,6 +458,18 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_sampler=GroupedBatchSampler(train_dataset, batch_size=args.train_batch_size),
+        collate_fn=custom_collate_fn,
+        num_workers=args.dataloader_num_workers,
+    )
+
+    val_dataset = CombinedDataset(
+        # path1=args.data_root_path_1,
+        path2=args.val_data_root_path_2,
+    )
+
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_sampler=GroupedBatchSampler(train_dataset, batch_size=1),
         collate_fn=custom_collate_fn,
         num_workers=args.dataloader_num_workers,
     )
@@ -501,9 +556,13 @@ def main():
             
             if global_step % args.save_steps == 0:
                 save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                accelerator.save_state(save_path)
+                # accelerator.save_state(save_path)
                 # torch.save(pose_ctrl.state_dict(), os.path.join(save_path,'model.pth'))
+                pose_model = PoseCtrlV4_val(pipe, image_encoder, raw_base_points2, torch.device("cuda"))
+
                 change_checkpoint(pose_ctrl.state_dict(), save_path)
+                validation(pose_model, save_path, val_dataloader, torch.device("cuda"))
+
 
             begin = time.perf_counter()
 
