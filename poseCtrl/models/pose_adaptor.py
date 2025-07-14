@@ -260,9 +260,9 @@ class VPmatrixPointsV1(nn.Module):
                 if 0 <= x < image_width and 0 <= y < image_height:
                     image_array[y, x] = 0  
             inverted_array = 255 - image_array
-            kernel = np.ones((3, 3), np.uint8)  
+            kernel = np.ones((9, 9), np.uint8)  
             dilated_image = cv2.dilate(inverted_array, kernel, iterations=1)  
-            smoothed_image = cv2.GaussianBlur(dilated_image, (7, 7), 0)
+            smoothed_image = cv2.GaussianBlur(dilated_image, (9,9), 0)
             _, binary_mask = cv2.threshold(smoothed_image, 100, 255, cv2.THRESH_BINARY)
             binary_mask_3ch = np.stack([binary_mask] * 3, axis=-1)  # [512, 512, 3]
             tensor_images[b] = torch.from_numpy(binary_mask_3ch).permute(2, 0, 1)
