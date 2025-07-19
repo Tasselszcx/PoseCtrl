@@ -847,13 +847,11 @@ class CombinedDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        """从数据集中检索给定索引的样本。"""
-        # ... (此方法无需改动)
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
         sample_data = self.samples[idx]
-        
+
         try:
             image = Image.open(sample_data['image_path']).convert('RGB')
         except IOError as e:
@@ -869,16 +867,17 @@ class CombinedDataset(Dataset):
             truncation=True,
             return_tensors="pt"
         ).input_ids
+
         final_sample = {
             'image': image_tensor,
             'projection_matrix': p_matrix_tensor,
             'view_matrix': v_matrix_tensor,
             'text': sample_data['text'],
             'type': sample_data['type'],
-            'text_input_ids': text_input_ids
+            'text_input_ids': text_input_ids,
+            'image_path': sample_data['image_path']  # ✅ 添加路径信息
         }
 
-        # 对于 v1 类型的数据，加载并转换 'feature' 图像
         if sample_data['type'] == 'v1':
             try:
                 feature_image = Image.open(sample_data['feature_path']).convert('RGB')

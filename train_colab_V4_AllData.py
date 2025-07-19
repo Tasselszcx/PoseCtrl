@@ -399,7 +399,7 @@ def main():
     image_proj_model_point = VPProjModel(
         cross_attention_dim=unet.config.cross_attention_dim,
         clip_embeddings_dim=image_encoder.config.projection_dim,
-        clip_extra_context_tokens=8,
+        clip_extra_context_tokens=4,
     )
     # init pose modules
     attn_procs = {}
