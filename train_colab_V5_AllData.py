@@ -449,7 +449,7 @@ def main():
     # dataloader
     # train_dataset = CustomDataset_v4(args.data_root_path, camera_params_file=args.CAMERA_PARAMS_FILE, image_features_file=args.IMAGE_FEATURES_FILE)
     train_dataset = CombinedDataset(
-        path1=args.data_root_path_1,
+        # path1=args.data_root_path_1,
         path2=args.data_root_path_2,
         path3=args.data_root_path_3,
         # path4=args.data_root_path_4,
