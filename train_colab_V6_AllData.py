@@ -329,19 +329,18 @@ def custom_collate_fn(batch):
 
 
 class posectrl(nn.Module):
-    def __init__(self, unet, unet_copy, image_proj_model_point, image_proj_model, atten_modules_p, ckpt_path=None):
+    def __init__(self, unet, unet_copy, image_proj_model_point, atten_modules_p, ckpt_path=None):
         super().__init__()
         self.unet = unet
         self.unet_copy = unet_copy
         self.image_proj_model_point = image_proj_model_point
         self.atten_modules_p = atten_modules_p
-        self.image_proj_model = image_proj_model
 
         if ckpt_path is not None:
             self.load_from_checkpoint(ckpt_path)
 
-    def forward(self, noisy_latents, timesteps, encoder_hidden_states, V_matrix, P_matrix):
-        point_tokens = self.image_proj_model_point(V_matrix, P_matrix)
+    def forward(self, noisy_latents, timesteps, encoder_hidden_states, point_embeds, V_matrix, P_matrix):
+        point_tokens = self.image_proj_model_point(point_embeds, V_matrix, P_matrix)
 
         point_hidden_states = torch.cat([encoder_hidden_states, point_tokens], dim = 1)
 

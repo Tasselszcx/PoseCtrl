@@ -769,6 +769,7 @@ class PoseControlNetV6:
         num_inference_steps=30,
         V_matrix=None,
         P_matrix=None,
+        points=None,
         **kwargs,
     ):
         self.set_scale(scale)
@@ -792,7 +793,7 @@ class PoseControlNetV6:
         if not isinstance(negative_prompt, List):
             negative_prompt = [negative_prompt] * num_prompts
 
-        vpmatrix_points_embeds, uncon_vpmatrix_points_embeds= self.get_vpmatrix_points(V_matrix, P_matrix)
+        vpmatrix_points_embeds, uncon_vpmatrix_points_embeds= self.get_vpmatrix_points(V_matrix, P_matrix, points)
         bs_embed, seq_len, _ = vpmatrix_points_embeds.shape
         vpmatrix_points_embeds = vpmatrix_points_embeds.repeat(1, num_samples, 1)
         vpmatrix_points_embeds = vpmatrix_points_embeds.view(bs_embed * num_samples, seq_len, -1)
