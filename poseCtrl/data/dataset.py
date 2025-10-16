@@ -701,8 +701,23 @@ class CombinedDataset(Dataset):
         return final_sample
 
 
-class CombinedDatasetTest(Dataset):
-    def __init__(self, path1=None, path2=None, path3=None, path4=None, path5=None, transform=None, tokenizer=None):
+
+class ResizeAndPad(object):
+    def __init__(self, size, fill_color=(255,255,255)):
+        self.size = size
+        self.fill_color = fill_color
+    def __call__(self, img):
+        w, h = img.size
+        scale = min(self.size / w, self.size / h)
+        nw, nh = int(w * scale), int(h * scale)
+        img = img.resize((nw, nh), Image.BICUBIC)
+        new_img = Image.new('RGB', (self.size, self.size), self.fill_color)
+        new_img.paste(img, ((self.size - nw)//2, (self.size - nh)//2))
+        return new_img
+
+class CombinedDatasetTest(Dataset): 
+    def __init__(self, path1=None, path2=None, path3=None, path4=None, path5=None,
+                 transform=None, tokenizer=None, txt_subdir_name="txt", pad_to_max_len=True):
         self.transform = transform or transforms.Compose([
             ResizeAndPad(512, fill_color=(255, 255, 255)),
             transforms.ToTensor(),
@@ -715,6 +730,8 @@ class CombinedDatasetTest(Dataset):
         self.samples = []
         self.tokenizer = tokenizer
         self.joints2d_map = {}
+        self.txt_subdir_name = txt_subdir_name
+        self.pad_to_max_len = pad_to_max_len
 
         if path1:
             self._load_from_path1(path1)
@@ -724,19 +741,8 @@ class CombinedDatasetTest(Dataset):
             if root_path:
                 self._load_v4_style_data(root_path, path_name)
 
-    # ---------- 工具：解析 image_smpl.txt（块格式） ----------
+    # ---------- 解析 image_smpl.txt（块格式：固定21×3，可选） ----------
     def _load_name_to_21x3_map(self, txt_path):
-        """
-        读取块格式txt，返回 dict: name(str) -> np.ndarray(21,3)
-        块格式：
-            NameA
-            a11 a12 a13
-            ...
-            a21 a22 a23
-
-            NameB
-            ...
-        """
         name2arr = {}
         if not os.path.exists(txt_path):
             print(f"[param_txt] {txt_path} not found, will set param_21x3=None for unmatched.")
@@ -764,8 +770,41 @@ class CombinedDatasetTest(Dataset):
                 print(f"[param_txt][warn] block {bi} name={name}: got {len(rows)} rows (need 21). Skipped.")
                 continue
             name2arr[name] = np.array(rows, dtype=np.float32)
-        print(f"[param_txt] loaded {len(name2arr)} entries from {txt_path}")
+        # print(f"[param_txt] loaded {len(name2arr)} entries from {txt_path}")
         return name2arr
+
+    # ---------- 新增：逐图同名 .txt（不定行N×3） ----------
+    def _load_points_from_per_image_txt(self, txt_dir, image_stem, image_filename):
+        if not txt_dir or (not os.path.exists(txt_dir)):
+            return None
+
+        cand1 = os.path.join(txt_dir, f"{image_stem}.txt")
+        cand2 = os.path.join(txt_dir, f"{image_filename}.txt")
+
+        use_path = cand1 if os.path.exists(cand1) else (cand2 if os.path.exists(cand2) else None)
+        if use_path is None:
+            return None
+
+        rows = []
+        with open(use_path, "r", encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines:
+            return None
+
+        # 第一行是图片名，允许不完全匹配，不强制
+        # header_name = lines[0]
+        for ln in lines[1:]:
+            parts = ln.split()
+            if len(parts) != 3:
+                continue
+            try:
+                rows.append([float(parts[0]), float(parts[1]), float(parts[2])])
+            except ValueError:
+                continue
+
+        if len(rows) == 0:
+            return None
+        return np.array(rows, dtype=np.float32)
 
     def _read_matrices_from_file(self, file_path):
         with open(file_path, 'r') as file:
@@ -825,9 +864,14 @@ class CombinedDatasetTest(Dataset):
     def _load_v4_style_data(self, root_dir, path_name):
         print(f"Loading data from {path_name}: {root_dir}")
 
-        # 新增：在 v4 根目录查找 image_smpl.txt 并解析为映射
+        # 块文件：可选 21×3
         param_map_path = os.path.join(root_dir, "image_smpl.txt")
         param_map = self._load_name_to_21x3_map(param_map_path)
+
+        # 新增：逐图同名 .txt 目录（默认 root_dir/txt）
+        per_image_txt_dir = os.path.join(root_dir, self.txt_subdir_name)
+        if not os.path.exists(per_image_txt_dir):
+            per_image_txt_dir = None
 
         camera_params_file = os.path.join(root_dir, 'camera_params.txt')
         image_features_file = os.path.join(root_dir, 'image_features.txt')
@@ -873,7 +917,8 @@ class CombinedDatasetTest(Dataset):
 
             if any(ext in line for ext in ['.jpg', '.png', '.webp']):
                 if current_image_path and len(current_p_matrix) == 4 and len(current_v_matrix) == 4:
-                    self._add_v4_sample(root_dir, current_image_path, current_p_matrix, current_v_matrix, image_features, param_map)
+                    self._add_v4_sample(root_dir, current_image_path, current_p_matrix, current_v_matrix,
+                                        image_features, param_map, per_image_txt_dir)
                 current_image_path = line.replace(':', '')
                 current_p_matrix, current_v_matrix, parsing_mode = [], [], None
             elif line == 'P:':
@@ -892,21 +937,26 @@ class CombinedDatasetTest(Dataset):
                     continue
 
         if current_image_path and len(current_p_matrix) == 4 and len(current_v_matrix) == 4:
-            self._add_v4_sample(root_dir, current_image_path, current_p_matrix, current_v_matrix, image_features, param_map)
+            self._add_v4_sample(root_dir, current_image_path, current_p_matrix, current_v_matrix,
+                                image_features, param_map, per_image_txt_dir)
 
-    def _add_v4_sample(self, root_dir, image_path, p_matrix, v_matrix, image_features, param_map):
+    def _add_v4_sample(self, root_dir, image_path, p_matrix, v_matrix,
+                       image_features, param_map, per_image_txt_dir=None):
         image_filename = os.path.basename(image_path)
         image_stem, _ = os.path.splitext(image_filename)
         full_image_path = os.path.join(root_dir, image_filename)
         text_prompt = ", ".join(image_features.get(image_filename, []))
 
         if os.path.exists(full_image_path):
-            # 在本 root_dir 对应的 param_map 中匹配 21x3
+            # 块文件 21×3
             param_arr = None
             if image_stem in param_map:
                 param_arr = param_map[image_stem]
-            elif image_filename in param_map:  # 兜底：用完整文件名试一下
+            elif image_filename in param_map:
                 param_arr = param_map[image_filename]
+
+            # 新：逐图同名 .txt（不定行 N×3）
+            name_txt_arr = self._load_points_from_per_image_txt(per_image_txt_dir, image_stem, image_filename)
 
             self.samples.append({
                 'type': 'v4',
@@ -914,7 +964,8 @@ class CombinedDatasetTest(Dataset):
                 'projection_matrix': np.array(p_matrix, dtype=np.float32),
                 'view_matrix': np.array(v_matrix, dtype=np.float32),
                 'text': text_prompt,
-                'param_21x3_np': param_arr  # 找不到则为 None
+                'param_21x3_np': param_arr,
+                'name_txt_np': name_txt_arr
             })
 
     def __len__(self):
@@ -961,7 +1012,7 @@ class CombinedDatasetTest(Dataset):
 
         if sample_data['type'] == 'v4':
             image_name = os.path.basename(sample_data['image_path'])
-            # joints 可视化（保留原逻辑）
+            # joints 可视化（保留）
             if image_name in self.joints2d_map:
                 joints = self.joints2d_map[image_name]
                 joints_img = np.ones((512, 512, 3), dtype=np.uint8) * 255
@@ -1001,8 +1052,57 @@ class CombinedDatasetTest(Dataset):
                 joints_img = Image.fromarray(joints_img)
                 final_sample['joints_image'] = transforms.ToTensor()(joints_img)
 
-            # 21x3 参数（可能 None）
+            # 块文件 21×3（固定长）
             param_np = sample_data.get('param_21x3_np', None)
             final_sample['param_smpl'] = torch.from_numpy(param_np).float() if param_np is not None else None
 
+            # 新：逐图同名 .txt（不定行 N×3）
+            name_txt_np = sample_data.get('name_txt_np', None)
+            final_sample['points'] = torch.from_numpy(name_txt_np).float() if name_txt_np is not None else None
+
         return final_sample
+
+
+# —— 可选：用于 DataLoader 的 padding collate_fn ——
+import torch
+from torch.utils.data._utils.collate import default_collate
+
+def v4_collate_fn_pad(batch):
+    keys = batch[0].keys()
+    tensors_keys, list_keys = [], []
+    for k in keys:
+        if k == 'name_txt':
+            continue
+        try:
+            _ = default_collate([b[k] for b in batch])
+            tensors_keys.append(k)
+        except Exception:
+            list_keys.append(k)
+
+    output = {}
+    for k in tensors_keys:
+        output[k] = default_collate([b[k] for b in batch])
+    for k in list_keys:
+        output[k] = [b[k] for b in batch]
+
+    # pad name_txt
+    name_txt_list = [b.get('name_txt', None) for b in batch]
+    lengths = [x.shape[0] if (x is not None) else 0 for x in name_txt_list]
+    max_len = max(lengths) if len(lengths) > 0 else 0
+    if max_len == 0:
+        output['name_txt'] = None
+        output['name_txt_mask'] = None
+        return output
+
+    B = len(batch)
+    padded = torch.zeros(B, max_len, 3, dtype=torch.float32)
+    mask   = torch.zeros(B, max_len,   dtype=torch.bool)
+    for i, x in enumerate(name_txt_list):
+        if x is None or x.numel() == 0:
+            continue
+        n = x.shape[0]
+        padded[i, :n, :] = x
+        mask[i, :n]      = True
+    output['name_txt'] = padded
+    output['name_txt_mask'] = mask
+    return output
