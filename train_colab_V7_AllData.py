@@ -10,7 +10,7 @@ dataloader:
 point(base_model) encoder:
         PointNetEncoder
 PoseAttnProcessor:
-        PoseAttnProcessorV4
+        PoseAttnProcessorV7
 inference:
         PoseControlNetV7
         colabV4
@@ -40,7 +40,7 @@ current_dir = os.path.join(current_dir, "PoseCtrl")
 sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir,"poseCtrl"))
 from poseCtrl.models.pose_adaptor import VPmatrixPoints, ImageProjModel, VPmatrixPointsV1, VPProjModel, PointNetEncoder
-from poseCtrl.models.attention_processor import AttnProcessor, PoseAttnProcessorV4
+from poseCtrl.models.attention_processor import AttnProcessor, PoseAttnProcessorV4, PoseAttnProcessorV7
 from poseCtrl.data.dataset import CustomDataset_v4, load_base_points, CombinedDataset, CombinedDatasetTest
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, StableDiffusionInpaintPipelineLegacy, DDIMScheduler, AutoencoderKL
 from PIL import Image
@@ -469,7 +469,7 @@ def main():
                 "to_k_pose.weight": unet_sd[layer_name + ".to_k.weight"].clone(),
                 "to_v_pose.weight": unet_sd[layer_name + ".to_v.weight"].clone(),
             }
-            attn_procs[name] = PoseAttnProcessorV4(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim)
+            attn_procs[name] = PoseAttnProcessorV7(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim)
             attn_procs[name].load_state_dict(weights)
 
     unet_copy.set_attn_processor(attn_procs)
